@@ -20,7 +20,16 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module pixel_generator(
+module pixel_generator #(
+    parameter integer SCREEN_WIDTH = 640,
+    parameter integer SCREEN_HEIGHT = 480,
+    parameter real RELATIVE_ZOOM = 1.0,            
+    parameter integer ABSOLUTE_X_OFFSET = 0,
+    parameter integer ABSOLUTE_Y_OFFSET = 0,
+    parameter integer BASELINE_ITERATIONS_MAX = 50,
+    parameter integer STEP_SIZE = 1,
+    parameter integer BYTE_WIDTH = 8
+)(
 input           out_stream_aclk,
 input           s_axi_lite_aclk,
 input           axi_resetn,
@@ -60,6 +69,14 @@ input           s_axi_lite_wvalid
 
 localparam X_SIZE = 640;
 localparam Y_SIZE = 480;
+localparam real scale_factor = 1.0; // Assuming scale_factor is defined elsewhere or needs to be added
+localparam real x_min = (-(0.5 * SCREEN_WIDTH) + ABSOLUTE_X_OFFSET) * scale_factor / (RELATIVE_ZOOM * 100);
+localparam real x_max = ((0.5 * SCREEN_WIDTH) + ABSOLUTE_X_OFFSET) * scale_factor / (RELATIVE_ZOOM * 100);
+localparam real y_min = (-(0.5 * SCREEN_HEIGHT) + ABSOLUTE_Y_OFFSET) * scale_factor / (RELATIVE_ZOOM * 100);
+localparam real y_max = ((0.5 * SCREEN_HEIGHT) + ABSOLUTE_Y_OFFSET) * scale_factor / (RELATIVE_ZOOM * 100);
+localparam integer relative_iterations_max = BASELINE_ITERATIONS_MAX * RELATIVE_ZOOM;
+localparam integer relative_step_size = integer(float(STEP_SIZE) / (100 * RELATIVE_ZOOM) * scale_factor);
+
 localparam REG_FILE_SIZE = 8;
 parameter AXI_LITE_ADDR_WIDTH = 8;
 
@@ -76,7 +93,7 @@ localparam AWAIT_READ = 2'b10;
 localparam AXI_OK = 2'b00;
 localparam AXI_ERR = 2'b10;
 
-    reg [31:0]                          regfile [REG_FILE_SIZE-1:0];
+reg [31:0]                          regfile [REG_FILE_SIZE];
 reg [AXI_LITE_ADDR_WIDTH-3:0]       writeAddr, readAddr;
 reg [31:0]                          readData, writeData;
 reg [1:0]                           readState = AWAIT_RADD;
@@ -188,50 +205,83 @@ assign s_axi_lite_wready = (writeState == AWAIT_WADD_AND_DATA || writeState == A
 assign s_axi_lite_bvalid = (writeState == AWAIT_RESP);
 assign s_axi_lite_bresp = (writeAddr < REG_FILE_SIZE) ? AXI_OK : AXI_ERR;
 
+reg [31:0] x = x_min;
+reg [31:0] y = y_max;
+reg [BYTE_WIDTH-1:0] img_arr [3*SCREEN_WIDTH*SCREEN_HEIGHT:0];
 
+wire first = (x == x_min) & (y == y_min);
+wire lastx = (x == x_max);
+wire lasty = (y == y_max);
 
-reg [9:0] x;
-reg [8:0] y;
-
-wire first = (x == 0) & (y==0);
-wire lastx = (x == X_SIZE - 1);
-wire lasty = (y == Y_SIZE - 1);
-
-always @(posedge out_stream_aclk) begin
-    if (periph_resetn) begin
+always @(posedge aclk) begin
+    if (aresetn) begin
         if (ready) begin
             if (lastx) begin
-                x <= 9'd0;
+                x <= x_min;
                 if (lasty) begin
-                    y <= 9'd0;
+                    y <= y_min;
                 end
                 else begin
-                    y <= y + 9'd1;
+                    y <= y + relative_step_size;
                 end
             end
-            else x <= x + 9'd1;
+            else begin 
+                x <= x + relative_step_size;
+            end
         end
     end
     else begin
-        x <= 0;
-        y <= 0;
+        x <= x_min;
+        y <= y_min;
     end
 end
 
-wire valid_int = 1'b1;
+always @(*) begin
+    if (valid_int) begin
+        if (iterations < relative_iterations_max) begin
+            r = 255;
+            g = 255;
+            b = 255;
+        end
+        else begin
+            r = 0;
+            g = 0;
+            b = 0;
+        end
+    end
+end
 
-wire [7:0] r, g, b;
-assign r = x[7:0];
-assign g = y[7:0];
-assign b = x[6:0]+y[6:0];
+wire valid_int;
+wire [31:0] iterations; // Assuming iterations is 32-bit
+reg [7:0] r, g, b;
 
-packer pixel_packer(    .aclk(out_stream_aclk),
-                        .aresetn(periph_resetn),
-                        .r(r), .g(g), .b(b),
-                        .eol(lastx), .in_stream_ready(ready), .valid(valid_int), .sof(first),
-                        .out_stream_tdata(out_stream_tdata), .out_stream_tkeep(out_stream_tkeep),
-                        .out_stream_tlast(out_stream_tlast), .out_stream_tready(out_stream_tready),
-                        .out_stream_tvalid(out_stream_tvalid), .out_stream_tuser(out_stream_tuser) );
+single_engine single_engine(
+    .clk(aclk),
+    .reset(aresetn),
+    .iterations_max(relative_iterations_max),
+    .x0(x),
+    .y0(y),
+    .finished(valid_int),
+    .iterations(iterations)
+);
 
- 
+packer pixel_packer(
+    .aclk(aclk),
+    .aresetn(aresetn),
+    .r(r),
+    .g(g),
+    .b(b),
+    .eol(lastx),
+    .in_stream_ready(ready),
+    .valid(valid_int),
+    .sof(first),
+    .out_stream_tdata(out_stream_tdata),
+    .out_stream_tkeep(out_stream_tkeep),
+    .out_stream_tlast(out_stream_tlast),
+    .out_stream_tready(out_stream_tready),
+    .out_stream_tvalid(out_stream_tvalid),
+    .out_stream_tuser(out_stream_tuser)
+);
+
 endmodule
+
