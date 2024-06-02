@@ -210,9 +210,12 @@ assign s_axi_lite_bresp = (writeAddr < REG_FILE_SIZE) ? AXI_OK : AXI_ERR;
 reg signed [31:0] x = x_min;
 reg signed [31:0] y = y_min;
 
-wire first = (x == x_min) & (y==y_min);
-wire lastx = (x == x_max - relative_step_size);
-wire lasty = (y == y_max - relative_step_size);
+reg first = 1'b1;
+
+
+
+reg lastx = 1'b0;
+reg lasty = 1'b0;
 
 always @(posedge out_stream_aclk) begin
     if (periph_resetn) begin
@@ -253,6 +256,28 @@ single_engine engine (
 );
 
 always @(*) begin
+    if (x == x_min && y == y_min) begin
+        first = 1'b1;
+    end
+    else begin
+        first = 1'b0;
+    end
+    if (x == x_max - relative_step_size) begin
+        lastx = 1'b1;
+    end
+    else begin
+        lastx = 1'b0;
+    end
+    if (y == y_max - relative_step_size) begin
+        lasty = 1'b1;
+    end
+    else begin
+        lasty = 1'b0;
+    end
+    
+        
+    
+    
     if (valid_int) begin
         if (iterations < relative_iterations_max) begin
             r = 8'd255;
@@ -281,4 +306,3 @@ packer pixel_packer(    .aclk(out_stream_aclk),
 
  
 endmodule
-
